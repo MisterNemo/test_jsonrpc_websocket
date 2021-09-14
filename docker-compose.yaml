@@ -1,0 +1,29 @@
+version: '3'
+
+services:
+    redis:
+        image: redis:alpine
+        hostname: redis
+        ports:
+            - "6379:6379"
+
+    app: &app
+        build: ./build/app
+        hostname: app
+        env_file:
+            - env_app
+        expose:
+            - 8000
+        ports:
+            - "8000:8000"
+        volumes:
+            - ./src:/code
+            - ./static:/static
+            - ./media:/media
+            - ./logs:/logs
+        depends_on:
+            - db
+            - redis
+            - rabbitmq
+        command: gunicorn --chdir /code config.asgi:application --workers 2 --bind :8000  --worker-class uvicorn.workers.UvicornWorker
+#        command: uvicorn config.asgi:application --reload --debug

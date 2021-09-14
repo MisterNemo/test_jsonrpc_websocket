@@ -1,0 +1,2 @@
+DEBUG=on
+REDIS_HOST=redis

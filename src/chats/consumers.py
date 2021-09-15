@@ -1,15 +1,29 @@
-import json
-from channels.generic.websocket import AsyncJsonWebsocketConsumer
+from channels import DEFAULT_CHANNEL_LAYER
+from channels_jsonrpc import AsyncJsonRpcWebsocketConsumer
+
+from chats.services import get_user_by_token
+from chats.services import send_message
+from chats.services import send_message_for_users
 
 
-class ChatConsumer(AsyncJsonWebsocketConsumer):
+class ChatConsumer(AsyncJsonRpcWebsocketConsumer):
+    user_id = ""
+
     async def connect(self):
-        self.room_name = self.scope['url_route']['kwargs']['room_name']
-        self.room_group_name = 'chat_%s' % self.room_name
+        token = self.scope['url_route']['kwargs']['token']
+        user = await get_user_by_token(token)
 
-        # Join room group
+        self.user_id = user.id
+
+        # # Join room group
         await self.channel_layer.group_add(
-            self.room_group_name,
+            DEFAULT_CHANNEL_LAYER,
+            self.channel_name
+        )
+
+        # # # Join self chat
+        await self.channel_layer.group_add(
+            'user_' + str(self.user_id),
             self.channel_name
         )
 
@@ -18,29 +32,58 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
     async def disconnect(self, close_code):
         # Leave room group
         await self.channel_layer.group_discard(
-            self.room_group_name,
+            DEFAULT_CHANNEL_LAYER,
             self.channel_name
         )
 
-    # Receive message from WebSocket
-    async def receive(self, text_data):
-        text_data_json = json.loads(text_data)
-        message = text_data_json['message']
-
-        # Send message to room group
-        await self.channel_layer.group_send(
-            self.room_group_name,
-            {
-                'type': 'chat_message',
-                'message': message
-            }
+        await self.channel_layer.group_discard(
+            'user_' + str(self.user_id),
+            self.channel_name
         )
 
-    # Receive message from room group
-    async def chat_message(self, event):
-        message = event['message']
+    async def message_for_user(self, event):
+        await self.send_json(event["data"])
 
-        # Send message to WebSocket
-        await self.send(text_data=json.dumps({
-            'message': message
-        }))
+
+@ChatConsumer.rpc_method()
+async def chat(**kwargs):
+    """public chat method"""
+    message = kwargs["message"],
+    token = kwargs["consumer"].scope['url_route']['kwargs']['token']
+    user = await get_user_by_token(token)
+
+    await send_message(DEFAULT_CHANNEL_LAYER, 'public', message, user)
+
+
+@ChatConsumer.rpc_method()
+async def sendMessage(**kwargs):
+    """private chat method"""
+    """{"id": 1, "jsonrpc": "2.0", "method": "sendMessage", "params": {ids:[], message:}}"""
+    """
+    {
+      "jsonrpc": "2.0",
+      "method": "sendMessage",
+      "params": {
+        "ids": "*", (or [ids])
+        "message": "Hi"
+      },
+      "id": 1
+    }
+    """
+    message = kwargs["message"],
+    token = kwargs["consumer"].scope['url_route']['kwargs']['token']
+    user = await get_user_by_token(token)
+
+    if kwargs["ids"] == "*":
+        await send_message_for_users(message, user)
+    else:
+        await send_message_for_users(message, user, kwargs["ids"])
+
+
+@ChatConsumer.rpc_method()
+async def sendEcho(**kwargs):
+    """send private message  to yourself"""
+    message = kwargs["message"],
+    token = kwargs["consumer"].scope['url_route']['kwargs']['token']
+    user = await get_user_by_token(token)
+    await send_message('user_' + str(user.id), 'self', message, user)
